@@ -214,18 +214,25 @@ class BlhostHelper:
     def run_command(self, command, use_json=True):
         """Execute blhost command"""
         json_flag = "-j " if use_json else ""
-        full_command = f"blhost {self.connection_params} {json_flag}-- {command}"
+        
+        # Build command as list for more reliable execution
+        cmd_parts = ["blhost"]
+        cmd_parts.extend(self.connection_params.split())
+        if use_json:
+            cmd_parts.append("-j")
+        cmd_parts.append("--")
+        cmd_parts.extend(command.split())
         
         if self.debug:
-            print(f"Executing: {full_command}")
+            print(f"Executing: {' '.join(cmd_parts)}")
         
         try:
             result = subprocess.run(
-                full_command,
-                shell=True,
+                cmd_parts,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=15,
+                stdin=subprocess.DEVNULL
             )
             
             # Debug output
@@ -332,13 +339,13 @@ class BlhostHelper:
             print("❌ Device not configured")
             return False
         
-        # 如果未指定 flash 大小，使用默认值
+        # If flash size not specified, use default value
         if flash_size is None:
             flash_size = self.get_default_flash_size()
             if flash_size:
                 print(f"Using default flash size: {flash_size}")
         
-        # 获取 FCB 文件
+        # Get FCB file
         fcb_filename = self.get_fcb_file_for_flash_size(flash_size)
         if not fcb_filename:
             print(f"❌ No FCB file configured for flash size: {flash_size}")
@@ -443,7 +450,7 @@ class BlhostHelper:
     
     def erase_flash(self, start_addr=None, size=None):
         """Erase FLASH"""
-        # 确定 flash 大小字符串（用于初始化）
+        # Determine flash size string (for initialization)
         flash_size_str = None
         
         # Handle address parameter
@@ -485,7 +492,7 @@ class BlhostHelper:
                 size_bytes = int(size, 0)
             else:
                 size_bytes = size
-            # 尝试找到对应的 flash 大小字符串
+            # Try to find corresponding flash size string
             for fs, fb in self.FLASH_SIZE_MAPPING.items():
                 if fb == size_bytes:
                     flash_size_str = fs
@@ -495,7 +502,7 @@ class BlhostHelper:
             print("❌ Invalid erase size")
             return False
         
-        # 初始化 FLASH（使用对应的 FCB 文件）
+        # Initialize FLASH (using corresponding FCB file)
         if not self.initialize_flash(flash_size_str):
             return False
         
