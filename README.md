@@ -35,7 +35,7 @@ A simple Python helper script for NXP RW61x chip programming using the BLHOST co
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/andrew-quectel/rw61x-blhost-helper.git
+   git clone https://github.com/Quectel-ShortRange/rw61x-blhost-helper.git
    cd nxp-blhost-tool
    ```
 
@@ -353,3 +353,4 @@ python blhost_helper.py -h
 # List all supported devices
 python blhost_helper.py --list
 ```
+
