@@ -10,6 +10,7 @@ import sys
 import json
 import subprocess
 import argparse
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -21,6 +22,14 @@ class BlhostHelper:
     DEFAULT_BAUDRATE = 2000000
     DEFAULT_READ_SIZE = "0x200"
     MAX_ERASE_BLOCK = 0x100000  # 1MB
+    QSPI_MEMORY_ID = 9  # External QSPI flash memory ID
+    
+    # Timeout settings (in seconds)
+    TIMEOUT_WRITE = 240      # 4 minutes for write/receive-sb operations
+    TIMEOUT_ERASE = 60       # 1 minute for erase operations
+    TIMEOUT_ERASE_ALL = 120  # 2 minutes for full flash erase
+    TIMEOUT_FUSE = 5         # 5 seconds for fuse programming
+    TIMEOUT_DEFAULT = 15     # 15 seconds for general operations
     
     # FLASH size mapping
     FLASH_SIZE_MAPPING = {
@@ -211,9 +220,22 @@ class BlhostHelper:
         print(f"Connection params: {self.connection_params}")
         return True
     
-    def run_command(self, command, use_json=True):
+    def run_command(self, command, use_json=True, timeout=None):
         """Execute blhost command"""
         json_flag = "-j " if use_json else ""
+        
+        # Auto-determine timeout based on command if not specified
+        if timeout is None:
+            if "write-memory" in command or "receive-sb-file" in command:
+                timeout = self.TIMEOUT_WRITE
+            elif "flash-erase-all" in command:
+                timeout = self.TIMEOUT_ERASE_ALL
+            elif "flash-erase-region" in command:
+                timeout = self.TIMEOUT_ERASE
+            elif "efuse-program-once" in command:
+                timeout = self.TIMEOUT_FUSE
+            else:
+                timeout = self.TIMEOUT_DEFAULT
         
         # Build command as list for more reliable execution
         cmd_parts = ["blhost"]
@@ -225,18 +247,26 @@ class BlhostHelper:
         
         if self.debug:
             print(f"Executing: {' '.join(cmd_parts)}")
+            print(f"Timeout: {timeout}s")
         
         try:
+            # Record start time for debug mode
+            start_time = time.time()
+            
             result = subprocess.run(
                 cmd_parts,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=timeout,
                 stdin=subprocess.DEVNULL
             )
             
+            # Calculate execution time
+            execution_time = time.time() - start_time
+            
             # Debug output
             if self.debug:
+                print(f"Execution time: {execution_time:.3f}s")
                 if result.stdout:
                     print(f"STDOUT: {result.stdout}")
                 if result.stderr:
@@ -448,6 +478,29 @@ class BlhostHelper:
         
         return None, None
     
+    def erase_flash_all(self):
+        """Fast full erase using flash-erase-all command"""
+        # Initialize FLASH with default size
+        flash_size_str = self.get_default_flash_size()
+        if not flash_size_str:
+            print("❌ Cannot determine default flash size")
+            return False
+        
+        print(f"Performing full flash erase (flash size: {flash_size_str})...")
+        
+        if not self.initialize_flash(flash_size_str):
+            return False
+        
+        print(f"Using fast full erase command (flash-erase-all {self.QSPI_MEMORY_ID})")
+        result = self.run_command(f"flash-erase-all {self.QSPI_MEMORY_ID}", use_json=False)
+        
+        if result and result.get("returncode") == 0:
+            print("✅ Full FLASH erase completed")
+            return True
+        else:
+            print("❌ Full erase failed")
+            return False
+    
     def erase_flash(self, start_addr=None, size=None):
         """Erase FLASH"""
         # Determine flash size string (for initialization)
@@ -506,7 +559,7 @@ class BlhostHelper:
         if not self.initialize_flash(flash_size_str):
             return False
         
-        print(f"Starting FLASH erase: {start_addr}, size: {size_bytes:0,} bytes")
+        print(f"Starting FLASH region erase: {start_addr}, size: {size_bytes:0,} bytes")
         
         addr = start_int
         remaining = size_bytes
@@ -530,8 +583,14 @@ class BlhostHelper:
         print("✅ FLASH erase completed")
         return True
     
-    def write_firmware(self, firmware_path, start_addr=None):
-        """Write firmware"""
+    def write_firmware(self, firmware_path, start_addr=None, full_erase=False):
+        """Write firmware
+        
+        Args:
+            firmware_path: Path to firmware file
+            start_addr: Start address (default: NS region start)
+            full_erase: If True, do full erase before writing (for debugging)
+        """
         if not os.path.exists(firmware_path):
             print(f"❌ Firmware file does not exist: {firmware_path}")
             return False
@@ -544,11 +603,17 @@ class BlhostHelper:
             print("❌ Firmware file is empty")
             return False
         
-        print(f"Firmware file: {firmware_path} ({file_size} bytes)")
+        print(f"Firmware file: {firmware_path} ({file_size:,} bytes)")
         
-        # Erase FLASH
-        if not self.erase_flash(start_addr, file_size):
-            return False
+        # Erase flash based on full_erase flag
+        if full_erase:
+            print("Full erase requested (--erase-all flag)")
+            if not self.erase_flash_all():
+                return False
+        else:
+            # Erase only the necessary flash region for this firmware (blhost handles alignment)
+            if not self.erase_flash(start_addr, file_size):
+                return False
         
         # Write firmware
         print(f"Starting firmware write to {start_addr}...")
@@ -717,13 +782,13 @@ Usage examples:
   # Read FLASH memory
   python %(prog)s -d FCM363X --read -a 0x08000400 -s 0x200 -o test.bin
   
-  # Erase FLASH (address and size are optional, will prompt if not specified)
-  python %(prog)s -d FGMH63X --erase
-  python %(prog)s -d FCM363X --erase -a 0x08000000 -s 0x800000
+  # Erase FLASH
+  python %(prog)s -d FGMH63X --erase                                 # Fast full erase (default)
+  python %(prog)s -d FCM363X --erase -a 0x08000000 -s 0x800000       # Region erase
   
   # Write firmware to FLASH
-  python %(prog)s -d FCM363XAC --write -f firmware.bin -a 0x08000000
-  python %(prog)s -d FCME63X --write -f app.bin
+  python %(prog)s -d FCM363XAC --write -f firmware.bin               # Normal write (region erase)
+  python %(prog)s -d FCME63X --write -f app.bin --erase-all          # Write with full erase (for debug)
   
   # Override default interface
   python %(prog)s -d FCM363X -i uart -p COM5 --test
@@ -752,7 +817,7 @@ Usage examples:
     group.add_argument('--test', action='store_true', help='Test connection')
     group.add_argument('--read', action='store_true', help='Read FLASH')
     group.add_argument('--write', action='store_true', help='Write firmware')
-    group.add_argument('--erase', action='store_true', help='Erase FLASH')
+    group.add_argument('--erase', action='store_true', help='Erase FLASH (fast full erase by default, or region erase with -a/-s)')
     group.add_argument('--list', action='store_true', help='List supported devices')
     
     # Parameters
@@ -760,6 +825,8 @@ Usage examples:
     parser.add_argument('-s', '--size', help='Size (e.g.: 0x1000, optional)')
     parser.add_argument('-f', '--file', help='File path')
     parser.add_argument('-o', '--output', help='Output file')
+    parser.add_argument('--erase-all', action='store_true', 
+                       help='Use with --write to do full erase before writing (for debugging)')
     
     args = parser.parse_args()
     
@@ -798,11 +865,17 @@ Usage examples:
         if not args.file:
             print("❌ Write operation requires file specification")
             return 1
-        success = tool.write_firmware(args.file, args.addr)
+        # Check if --erase-all flag is set for full erase before write
+        success = tool.write_firmware(args.file, args.addr, full_erase=args.erase_all)
     
     elif args.erase:
-        # Address and size parameters are optional, user will be prompted if not specified
-        success = tool.erase_flash(args.addr, args.size)
+        # If no addr/size specified, do fast full erase; otherwise region erase
+        if args.addr is None and args.size is None:
+            # No parameters: fast full erase
+            success = tool.erase_flash_all()
+        else:
+            # With parameters: region erase
+            success = tool.erase_flash(args.addr, args.size)
     
     else:
         # Default test connection

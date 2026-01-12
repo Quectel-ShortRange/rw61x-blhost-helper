@@ -142,29 +142,40 @@ python blhost_helper.py -d FCM363XLAC -p COM3 --read -a 0x08000400 -s 0x200
 ```
 
 #### 4. Erase Flash Memory
+
+**Fast full erase (recommended for clearing entire flash):**
 ```bash
-# Interactive erase (prompts for region and size)
+# Full erase using flash-erase-all command (fastest)
 python blhost_helper.py -d FCM363X --erase
+python blhost_helper.py -d FGMH63X --erase
+```
 
-# Erase specific region with size
-python blhost_helper.py -d FGMH63X --erase -a 0x08000000 -s 0x1000000
-
-# Erase from specific address (prompts for size)
-python blhost_helper.py -d FCME63X --erase -a 0x08000000
+**Region erase (for specific address range):**
+```bash
+# Erase specific region with address and size
+python blhost_helper.py -d FGMH63X --erase -a 0x08000000 -s 0x400000
+python blhost_helper.py -d FCME63X --erase -a 0x08000000 -s 0x1000000
 ```
 
 #### 5. Write Firmware
+
+**Normal write (recommended for production):**
 ```bash
-# Write firmware (uses default address 0x08000000)
+# Write with region erase (safe, only erases necessary space)
 python blhost_helper.py -d FCM363XAC --write -f firmware.bin
-
-# Write to specific address
 python blhost_helper.py -d FCM363XLAC -p COM3 --write -f app.bin -a 0x08000000
-
-# Write to devices with different flash sizes
-python blhost_helper.py -d FCME63X --write -f firmware_32m.bin
-python blhost_helper.py -d FGMH63X --write -f firmware_16m.bin
 ```
+
+**Write with full erase (for debugging):**
+```bash
+# Write with full flash erase first (fast but erases entire flash)
+python blhost_helper.py -d FGMH63X --write -f firmware.bin --erase-all
+python blhost_helper.py -d FCME63X --write -f test.bin --erase-all
+```
+
+**Note:** 
+- Default write uses region erase (slower but safer, only erases firmware size)
+- `--erase-all` flag uses full flash erase (faster but erases entire flash, useful for debugging)
 
 #### 6. Debug Mode
 ```bash
@@ -339,10 +350,77 @@ python blhost_helper.py -d FCM363X --test --debug
 
 This will show:
 - Full BLHOST command line being executed
+- Command timeout settings
 - STDOUT and STDERR from BLHOST
 - Return codes
 - JSON parsing details
 - Detailed error messages
+
+## Performance & Optimization
+
+### Erase Operations
+
+The tool uses two erase strategies:
+
+1. **Full Flash Erase** (`flash-erase-all`):
+   - Single command execution
+   - Fastest method (typically < 10 seconds)
+   - Erases entire flash memory
+   - Used when: `--erase` without parameters
+
+2. **Region Erase** (`flash-erase-region`):
+   - Multiple block-based erase operations
+   - Slower but safer (only erases specified range)
+   - Erases in 1MB blocks
+   - Used for: firmware writes and `--erase -a ADDR -s SIZE`
+
+### Timeout Settings
+
+The tool automatically adjusts timeout based on operation type:
+
+| Operation | Timeout | Command |
+|-----------|---------|---------|
+| Write/Receive SB | 240s (4 min) | `write-memory`, `receive-sb-file` |
+| Full Erase | 120s (2 min) | `flash-erase-all` |
+| Region Erase | 60s (1 min) | `flash-erase-region` |
+| Fuse Program | 5s | `efuse-program-once` |
+| General | 15s | `get-property`, etc. |
+
+### Write Strategies
+
+**Production (Recommended):**
+```bash
+python blhost_helper.py -d FCM363X --write -f firmware.bin
+```
+- Uses region erase (only erases firmware size)
+- Safer for production (preserves data outside firmware region)
+- Automatically sector-aligned by blhost
+
+**Debug/Development:**
+```bash
+python blhost_helper.py -d FCM363X --write -f firmware.bin --erase-all
+```
+- Uses full flash erase before writing
+- Faster total time but erases entire flash
+- Ensures clean flash state for testing
+- ⚠️ Destroys all data on flash
+
+## Technical Details
+
+### Windows Subprocess Fix
+
+The tool includes fixes for Windows PowerShell subprocess handling:
+- Direct command execution without shell wrapper
+- Prevents subprocess hang issues
+- Proper stdin handling with `DEVNULL`
+- Optimized timeout management
+
+### Memory ID
+
+External QSPI flash uses Memory ID 9:
+- Used in `flash-erase-all 9` command
+- Configured during flash initialization
+- Distinct from internal flash (Memory ID 0)
 
 ### Getting Help
 
