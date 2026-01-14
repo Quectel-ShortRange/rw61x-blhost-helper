@@ -11,6 +11,7 @@ import json
 import subprocess
 import argparse
 import time
+import shlex
 from datetime import datetime
 from pathlib import Path
 
@@ -243,7 +244,8 @@ class BlhostHelper:
         if use_json:
             cmd_parts.append("-j")
         cmd_parts.append("--")
-        cmd_parts.extend(command.split())
+        # Use shlex.split to properly handle quoted paths with spaces
+        cmd_parts.extend(shlex.split(command))
         
         if self.debug:
             print(f"Executing: {' '.join(cmd_parts)}")
@@ -391,7 +393,7 @@ class BlhostHelper:
         
         commands = [
             "fill-memory 0x2000F000 4 0xC0100002 word",
-            f"write-memory 0x2000F000 {fcb_file}",
+            f'write-memory 0x2000F000 "{fcb_file}"',
             "configure-memory 9 0x2000F000"
         ]
         
@@ -617,7 +619,7 @@ class BlhostHelper:
         
         # Write firmware
         print(f"Starting firmware write to {start_addr}...")
-        result = self.run_command(f"write-memory {start_addr} {firmware_path}", use_json=False)
+        result = self.run_command(f'write-memory {start_addr} "{firmware_path}"', use_json=False)
         
         if result and result.get("returncode") == 0:
             print("✅ Firmware write successful")
@@ -651,7 +653,7 @@ class BlhostHelper:
         print(f"Reading FLASH: {start_addr}, size: {size}")
         print(f"Output file: {output_file}")
         
-        # Read data
+        # Read data'read-memory {start_addr} {size}'
         result = self.run_command(f"read-memory {start_addr} {size}", use_json=False)
         
         if not result or result.get("returncode", 1) != 0:
