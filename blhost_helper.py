@@ -74,6 +74,7 @@ class BlhostHelper:
         self.variant_config = None   # Variant configuration
         self.interface = None
         self.connection_params = None
+        self.current_max_erase_block = self.MAX_ERASE_BLOCK  # Current max erase block size
     
     def _load_config(self):
         """Load device configuration from JSON file"""
@@ -377,11 +378,20 @@ class BlhostHelper:
             if flash_size:
                 print(f"Using default flash size: {flash_size}")
         
-        # Get FCB file
+        # Get FCB file and flash configuration
         fcb_filename = self.get_fcb_file_for_flash_size(flash_size)
         if not fcb_filename:
             print(f"❌ No FCB file configured for flash size: {flash_size}")
             return False
+        
+        # Get max erase block size from configuration
+        flash_configs = self.variant_config.get("flash_configs", {})
+        if flash_size in flash_configs:
+            flash_config = flash_configs[flash_size]
+            # Read max_erase_block from config, default to MAX_ERASE_BLOCK
+            self.current_max_erase_block = flash_config.get("max_erase_block", self.MAX_ERASE_BLOCK)
+            if self.current_max_erase_block != self.MAX_ERASE_BLOCK:
+                print(f"Using custom max erase block: 0x{self.current_max_erase_block:X} ({self.current_max_erase_block:,} bytes)")
         
         fcb_file = self.fcb_dir / fcb_filename
         
@@ -493,15 +503,59 @@ class BlhostHelper:
         if not self.initialize_flash(flash_size_str):
             return False
         
-        print(f"Using fast full erase command (flash-erase-all {self.QSPI_MEMORY_ID})")
-        result = self.run_command(f"flash-erase-all {self.QSPI_MEMORY_ID}", use_json=False)
+        # Check if we should skip fast erase for this flash type
+        flash_configs = self.variant_config.get("flash_configs", {})
+        skip_erase_all = False
+        if flash_size_str in flash_configs:
+            skip_erase_all = flash_configs[flash_size_str].get("skip_erase_all", False)
         
-        if result and result.get("returncode") == 0:
-            print("✅ Full FLASH erase completed")
-            return True
+        if skip_erase_all:
+            print(f"🔶 Skipping flash-erase-all (not supported for this flash type)")
+            print("Using region erase (flash-erase-region) instead...")
         else:
-            print("❌ Full erase failed")
+            # Try fast full erase first
+            print(f"Using fast full erase command (flash-erase-all {self.QSPI_MEMORY_ID})")
+            result = self.run_command(f"flash-erase-all {self.QSPI_MEMORY_ID}", use_json=False)
+            
+            if result and result.get("returncode") == 0:
+                print("✅ Full FLASH erase completed")
+                return True
+            else:
+                print("🔶 Fast full erase failed, trying fallback method...")
+                print("Using region erase (flash-erase-region) instead...")
+        
+        # Use region erase method
+        size_bytes = self.convert_flash_size_to_bytes(flash_size_str)
+        if not size_bytes:
+            print("❌ Cannot determine flash size for region erase")
             return False
+        
+        # Use NS region start address for full erase
+        start_addr = self.FLASH_REGIONS['NS']['start_addr']
+        addr = start_addr
+        remaining = size_bytes
+        
+        print(f"Erasing {size_bytes:,} bytes starting from 0x{start_addr:08X}")
+        print(f"Max erase block size: 0x{self.current_max_erase_block:X} ({self.current_max_erase_block:,} bytes)")
+        
+        while remaining > 0:
+            block_size = min(remaining, self.current_max_erase_block)
+            addr_hex = f"0x{addr:08X}"
+            size_hex = f"0x{block_size:X}"
+            
+            progress = ((size_bytes - remaining) / size_bytes) * 100
+            print(f"Erase progress: {progress:.1f}% - {addr_hex} ({block_size:,} bytes)")
+            
+            result = self.run_command(f"flash-erase-region {addr_hex} {size_hex}", use_json=False)
+            if not result or result.get("returncode", 1) != 0:
+                print(f"❌ Region erase failed at: {addr_hex}")
+                return False
+            
+            addr += block_size
+            remaining -= block_size
+        
+        print("✅ Full FLASH erase completed (using region erase)")
+        return True
     
     def erase_flash(self, start_addr=None, size=None):
         """Erase FLASH"""
@@ -562,19 +616,20 @@ class BlhostHelper:
             return False
         
         print(f"Starting FLASH region erase: {start_addr}, size: {size_bytes:0,} bytes")
+        print(f"Max erase block size: 0x{self.current_max_erase_block:X} ({self.current_max_erase_block:,} bytes)")
         
         addr = start_int
         remaining = size_bytes
         
         while remaining > 0:
-            block_size = min(remaining, self.MAX_ERASE_BLOCK)
+            block_size = min(remaining, self.current_max_erase_block)
             addr_hex = f"0x{addr:08X}"
             size_hex = f"0x{block_size:X}"
             
             progress = ((size_bytes - remaining) / size_bytes) * 100
             print(f"Erase progress: {progress:.1f}% - {addr_hex} ({size_hex})")
             
-            result = self.run_command(f"flash-erase-region {addr_hex} {size_hex} 0", use_json=False)
+            result = self.run_command(f"flash-erase-region {addr_hex} {size_hex}", use_json=False)
             if not result or result.get("returncode", 1) != 0:
                 print(f"❌ Erase failed: {addr_hex}")
                 return False

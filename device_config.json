@@ -35,6 +35,8 @@
                     "flash_configs": {
                         "8M": {
                             "fcb_file": "MXIC_MX25L6433F.bin",
+                            "max_erase_block": 524288,
+                            "skip_erase_all": true,
                             "default": true
                         }
                     }
@@ -44,6 +46,8 @@
                     "flash_configs": {
                         "8M": {
                             "fcb_file": "MXIC_MX25L6433F.bin",
+                            "max_erase_block": 524288,
+                            "skip_erase_all": true,
                             "default": true
                         }
                     }
@@ -53,6 +57,8 @@
                     "flash_configs": {
                         "16M": {
                             "fcb_file": "MXIC_MX25L12845G.bin",
+                            "max_erase_block": 524288,
+                            "skip_erase_all": true,
                             "default": true
                         }
                     }
@@ -101,6 +107,8 @@
                     "flash_configs": {
                         "8M": {
                             "fcb_file": "MXIC_MX25L6433F.bin",
+                            "max_erase_block": 524288,
+                            "skip_erase_all": true,
                             "default": true
                         }
                     }
